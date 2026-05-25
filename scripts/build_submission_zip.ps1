@@ -37,7 +37,7 @@ $requiredFiles = @(
 $dataDir = Join-Path $projectRoot "data"
 if (Test-Path $dataDir) {
     Get-ChildItem -Path $dataDir -File |
-        Where-Object { $_.Extension.ToLowerInvariant() -in @(".jpeg", ".jpg") } |
+        Where-Object { $_.Extension.ToLowerInvariant() -in @(".jpeg", ".jpg", ".png", ".xlsx") } |
         ForEach-Object {
             $relative = $_.FullName.Substring($projectRoot.Length).TrimStart([char[]]@("\", "/"))
             $requiredFiles += $relative.Replace("\", "/")

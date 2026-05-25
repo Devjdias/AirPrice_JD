@@ -35,6 +35,10 @@ LOGS/
 *.html.gz
 *.png
 
+# Public supplemental artifacts used by README/documentation
+!data/*.xlsx
+!data/*.png
+
 # OS/editor
 .DS_Store
 Thumbs.db

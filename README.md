@@ -50,7 +50,7 @@ pip install -r config/requirements.txt
 
 ## Fonte Oficial e Pacote Suplementar
 
-O repositório GitHub informado no artigo de apresentação deve ser tratado como a página pública oficial do projeto. Ele deve conter o código-fonte, a documentação, a licença, as instruções de instalação e o arquivo `config/config.example.ini`.
+O repositório GitHub informado no artigo de apresentação deve ser tratado como a página pública oficial do projeto. Ele deve conter o código-fonte, a documentação, a licença, as instruções de instalação, o arquivo `config/config.example.ini` e os materiais complementares públicos mantidos em `data/`.
 
 Para submissão suplementar, gere um ZIP limpo a partir da raiz do projeto:
 
@@ -64,7 +64,7 @@ O arquivo será criado em:
 dist/flight-latam-acm-software.zip
 ```
 
-Esse ZIP é montado por lista branca e inclui apenas código-fonte, documentação, instruções, licença, dependências e configuração pública de exemplo. Ele exclui `config/config.ini`, credenciais, `DADOS_BRUTOS/`, `LOGS/`, caches Python, ambientes virtuais, planilhas geradas, screenshots e dumps HTML.
+Esse ZIP é montado por lista branca e inclui código-fonte, documentação, materiais complementares públicos do diretório `data/`, instruções, licença, dependências e configuração pública de exemplo. Ele exclui `config/config.ini`, credenciais, `DADOS_BRUTOS/`, `LOGS/`, caches Python, ambientes virtuais, artefatos locais não curados, screenshots de execução em `LOGS/` e dumps HTML.
 
 ## Como Executar
 
@@ -83,6 +83,12 @@ python src\coleta_tcc.py
 ```
 
 Esse script executa todas as rotas cadastradas em `ROTAS_DISPONIVEIS` para as janelas `[7, 15, 30, 90]`, em modo headless, com uma repetição por rota e registro sem dados habilitado.
+
+## Demonstração em Vídeo
+
+Confira o funcionamento do sistema em execução na interface gráfica:
+
+[Assista ao vídeo demonstrativo](https://l1nk.dev/0YbEY)
 
 ## Configuração
 
@@ -145,7 +151,13 @@ Flight-Latam/
 |   `-- DOCUMENTACAO_TECNICA.md
 |
 |-- data/
+|   |-- agendador.png
+|   |-- analise.xlsx
+|   |-- config.png
 |   |-- diagrama_sequência_UML.jpeg
+|   |-- hist&expo.png
+|   |-- inicio.png
+|   `-- manual.png
 |
 |-- scripts/
 |   `-- build_submission_zip.ps1
@@ -170,6 +182,12 @@ Flight-Latam/
 Para detalhes de arquitetura, fluxo de execução, dataset, tratamento de evidências e limitações atuais, consulte:
 
 [Documentação Técnica](docs/DOCUMENTACAO_TECNICA.md)
+
+## Materiais Complementares
+
+- [Planilha de análise](data/analise.xlsx): dataset completo coletado no estudo.
+- [Diagrama de sequência UML](data/diagrama_sequência_UML.jpeg): modelagem do fluxo principal do sistema.
+- Capturas da interface gráfica: [início](data/inicio.png), [coleta manual](data/manual.png), [agendador](data/agendador.png), [histórico e exportação](<data/hist&expo.png>) e [configuração](data/config.png).
 
 ## Segurança
 

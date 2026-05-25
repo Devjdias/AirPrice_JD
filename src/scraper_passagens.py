@@ -26,7 +26,7 @@ warnings.simplefilter("ignore", UserWarning)
 
 # ─── CAMINHOS GLOBAIS ──────────────────────────────────────────────────────────
 
-PASTA_BASE           = Path(__file__).parent.parent  # ← sobe um nível (estava em src/, agora vai para Oficial/)
+PASTA_BASE           = Path(__file__).parent.parent 
 PASTA_DADOS_BRUTOS   = PASTA_BASE / "DADOS_BRUTOS"
 PASTA_LOGS           = PASTA_BASE / "LOGS"
 PASTA_CHROME_PROFILES = PASTA_LOGS / "chrome_profiles"
@@ -36,7 +36,7 @@ for _pasta in [PASTA_DADOS_BRUTOS, PASTA_LOGS, PASTA_CHROME_PROFILES]:
     _pasta.mkdir(parents=True, exist_ok=True)
 
 # Garante que o Python encontre os módulos (scrapers) na mesma pasta deste script
-SRC_DIR = Path(__file__).parent  # pasta src/
+SRC_DIR = Path(__file__).parent  
 if str(SRC_DIR) not in sys.path:
     sys.path.append(str(SRC_DIR))
 
@@ -284,7 +284,7 @@ def executar_experimento_thread(app_ctrl, config):
     app_ctrl.log("-" * 55, "neutro")
 
     todos_resultados = []
-    html_logs = []  # lista de (path, hash_md5) dos HTML salvos neste experimento
+    html_logs = []  
 
     for rep in range(1, repeticoes + 1):
         if stop_event.is_set():
@@ -638,11 +638,9 @@ def enviar_google_sheets(app_ctrl, df, arquivo_credenciais, id_planilha, nome_ab
         novas_linhas = df_envio.values.tolist()
 
         # ── LÓGICA DE APPEND ──────────────────────────────────────────────────
-        # Lê o que já existe na aba para não apagar dados anteriores
         dados_existentes = aba.get_all_values()
 
         if not dados_existentes:
-            # Primeira vez: escreve cabeçalho + dados
             aba.update(
                 range_name="A1",
                 values=[df_envio.columns.tolist()] + novas_linhas,
@@ -652,7 +650,6 @@ def enviar_google_sheets(app_ctrl, df, arquivo_credenciais, id_planilha, nome_ab
                 f"{len(novas_linhas)} linha(s) + cabeçalho."
             )
         else:
-            # Aba já tem dados: acrescenta ABAIXO da última linha existente
             proxima_linha = len(dados_existentes) + 1
             aba.update(
                 range_name=f"A{proxima_linha}",
@@ -786,11 +783,11 @@ class ScraperApp(tk.Tk):
             self.frames[name] = frame
             frame.grid(row=0, column=0, sticky="nsew")
 
-        # Log de status (rodape fixo)
+       
         log_frame = ttk.LabelFrame(self, text="Log de Execucao", padding="8 4 8 4")
         log_frame.pack(side="bottom", fill="x", padx=50, pady=(0, 0))
         
-        # Força a caixa do log a ter uma altura maior
+        
         log_frame.configure(height=600)
         log_frame.pack_propagate(False)
 
@@ -976,13 +973,11 @@ class ExperimentoPage(ttk.Frame):
         )
         form.pack(padx=30, fill="x")
         
-        # O segredo do alinhamento: forçar a coluna 1 a expandir (weight=1)
         form.columnconfigure(1, weight=1)
 
         def lbl_entry(row, text, default):
             ttk.Label(form, text=text).grid(row=row, column=0, sticky="w", pady=5, padx=(0, 10))
             var = tk.StringVar(value=default)
-            # Removemos o 'width' fixo e usamos sticky="ew"
             ttk.Entry(form, textvariable=var, font=("Segoe UI", 10)).grid(row=row, column=1, sticky="ew", pady=5)
             return var
 
@@ -1120,7 +1115,6 @@ class AgendadorPage(ttk.Frame):
         )
         cfg_frame.pack(padx=30, fill="x")
         
-        # O segredo do alinhamento: forçar as colunas 1 e 3 a expandir (weight=1)
         cfg_frame.columnconfigure(1, weight=1)
         cfg_frame.columnconfigure(3, weight=1)
 
@@ -1170,7 +1164,6 @@ class AgendadorPage(ttk.Frame):
             cfg_frame, textvariable=self.priv_var, values=MODOS_PRIVACIDADE, state="readonly"
         ).grid(row=5, column=1, columnspan=3, sticky="ew", pady=6)
 
-        # As caixas da janela de antecedência que já tinha antes
         ttk.Label(cfg_frame, text="Janelas (Antecedencia):").grid(row=6, column=0, sticky="w", pady=6, padx=(0, 10))
         janelas_frame = ttk.Frame(cfg_frame)
         janelas_frame.grid(row=6, column=1, columnspan=3, sticky="ew", pady=6)

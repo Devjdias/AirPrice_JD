@@ -119,7 +119,7 @@ def _extrair_escalas(card, seletor):
     if digitos:
         return int(digitos[0])
 
-    return 1  # se tem o elemento mas nao tem numero, assume 1 escala
+    return 1  
 
 
 # ─── FUNÇÕES DESCONTINUADAS (hash file system) ──────────────────────────────
