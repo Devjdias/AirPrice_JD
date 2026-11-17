@@ -1,24 +1,25 @@
-# Security Policy
+# Segurança e publicação
 
-This repository is intended to contain only source code, public documentation,
-installation instructions, the open-source license, and safe example
-configuration files.
+O repositório distribui código-fonte, documentação, licença, configuração de exemplo e materiais complementares públicos de `data/`. As planilhas e imagens desse diretório também entram no pacote gerado por `scripts/build_submission_zip.ps1`.
 
-Do not publish:
+## Arquivos locais
 
-- `config/config.ini` with real local settings;
-- service-account JSON files or any other credentials;
-- Google Sheets IDs or private spreadsheet links;
-- generated Excel files from `DADOS_BRUTOS/`;
-- screenshots, saved HTML pages, or browser profiles from `LOGS/`;
-- proxy lists, passwords, tokens, keys, or local `.env` files.
+Os arquivos abaixo ficam no ambiente de execução e são excluídos do versionamento pelas regras de `.gitignore`.
 
-Use `config/config.example.ini` as the public configuration template.
+- `config/config.ini`, com configurações locais e caminhos de credenciais.
+- `credentials/` e arquivos JSON de Service Account.
+- `DADOS_BRUTOS/`, com planilhas das coletas.
+- `LOGS/`, incluindo `tentativas_coleta.csv`, screenshots, HTML compactado e o perfil persistente em `chrome_profiles/normal/`.
+- Arquivos `.env`, `.env.*`, `.pem`, `.key` e `.p12`.
 
-If any credential, spreadsheet ID, token, or private file is accidentally
-published, revoke or rotate it in the provider console before using the project
-again. Then remove the exposed file from the repository and regenerate a clean
-submission package.
+Use `config/config.example.ini` como modelo público. Mantenha IDs, links de planilhas privadas e listas de proxies na configuração local. Guarde senhas e tokens em arquivos privados com exclusão no `.gitignore`. Os perfis temporários dos modos de perfil limpo e incógnito são criados no diretório temporário do sistema operacional e têm remoção tentada ao encerrar o navegador.
 
-To report security concerns, use the public project issue tracker without
-including secrets, credentials, private URLs, or generated data in the report.
+Antes de acrescentar uma planilha ou imagem a `data/`, revise o conteúdo que será publicado. O empacotador inclui arquivos `.jpeg`, `.jpg`, `.png` e `.xlsx` diretamente desse diretório. As regras de `.gitignore` se aplicam a arquivos ainda sem rastreamento pelo Git. Arquivos já rastreados exigem revisão própria.
+
+## Exposição acidental
+
+Se uma credencial, chave ou token for publicado, revogue ou substitua o segredo no provedor correspondente. Remova o material exposto do repositório e dos pacotes distribuídos e revise o acesso aos arquivos envolvidos antes de gerar outro pacote.
+
+## Relato de problemas
+
+Relate problemas de segurança pelo rastreador de issues do projeto. Descreva o comportamento e os passos para reprodução com dados fictícios. Preserve credenciais, URLs privadas e dados de coleta ao preparar o relato.

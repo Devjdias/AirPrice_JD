@@ -3,6 +3,7 @@ from tkinter import messagebox, scrolledtext, ttk, filedialog
 from tkcalendar import DateEntry
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.remote.command import Command
 import pandas as pd
 import os
 import time
@@ -10,8 +11,13 @@ import sys
 import threading
 import random
 import gzip
+import json
 import shutil
+import socket
+import subprocess
 import tempfile
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 import gspread
@@ -50,15 +56,12 @@ ROTAS_DISPONIVEIS = {
     "JPA -> BSB ":    ("JPA", "BSB"), #(João Pessoa - Brasília)
 }
 
+# None = usa o user-agent nativo do Chrome instalado. Fixar uma versao no texto
+# (ex.: "Chrome/147") gera divergencia com os client hints (Sec-CH-UA) enviados
+# pelo navegador real e torna a sessao inconsistente quando o Chrome atualiza.
 USER_AGENTS = {
-    "Chrome Desktop (padrao)":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/147.0.0.0 Safari/537.36",
-    "Chrome Normal":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/147.0.0.0 Safari/537.36",
+    "Chrome Desktop (padrao)": None,
+    "Chrome Normal": None,
 }
 
 MODOS_PRIVACIDADE = [
@@ -201,52 +204,222 @@ def salvar_config(cfg):
 
 # ─── SELENIUM ──────────────────────────────────────────────────────────────────
 
+def _localizar_chrome():
+    """Retorna o caminho do chrome.exe (config.ini > caminhos padrao > registro)."""
+    cfg = carregar_config()
+    candidatos = [cfg.get("CHROME", "path", fallback="").strip()]
+    if os.name == "nt":
+        candidatos += [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ]
+        try:
+            import winreg
+            for raiz in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(raiz, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe") as k:
+                        candidatos.append(winreg.QueryValue(k, None))
+                except OSError:
+                    pass
+        except ImportError:
+            pass
+    else:
+        candidatos += [shutil.which(n) or "" for n in
+                       ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")]
+        candidatos.append("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    for c in candidatos:
+        if c and Path(c).is_file():
+            return c
+    raise FileNotFoundError(
+        "Google Chrome nao encontrado. Instale o Chrome ou informe o caminho em "
+        "config/config.ini, secao [CHROME], chave path."
+    )
+
+
+def _porta_livre():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _aguardar_porta_depuracao(porta, processo, timeout=30):
+    fim = time.time() + timeout
+    while time.time() < fim:
+        if processo.poll() is not None:
+            raise RuntimeError("O Chrome encerrou logo apos iniciar.")
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{porta}/json/version", timeout=2):
+                return
+        except Exception:
+            time.sleep(0.3)
+    raise TimeoutError("O Chrome nao abriu a porta de depuracao a tempo.")
+
+
+def _encerrar_processo_chrome(processo):
+    if not processo or processo.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(processo.pid), "/T", "/F"],
+                capture_output=True, timeout=15,
+            )
+        else:
+            processo.terminate()
+        processo.wait(timeout=10)
+    except Exception:
+        try:
+            processo.kill()
+        except Exception:
+            pass
+
+
+class ChromeAnexado(webdriver.Chrome):
+    """Driver conectado a um Chrome iniciado como processo comum.
+
+    O ChromeDriver nao lanca o navegador; ele apenas se conecta pela porta de
+    depuracao. Ao encerrar, o processo do Chrome tambem e finalizado.
+    """
+
+    _processo_chrome = None
+    _porta_depuracao = None
+
+    def _titulo_aba(self, alvo_id):
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._porta_depuracao}/json/list", timeout=5
+            ) as r:
+                for alvo in json.loads(r.read()):
+                    if alvo.get("id") == alvo_id:
+                        return alvo.get("title", ""), alvo.get("url", "")
+        except Exception:
+            pass
+        return "", ""
+
+    def abrir_url_desanexado(self, url, espera_max_s=45, should_stop=None):
+        """Abre a URL com o ChromeDriver desconectado e reconecta ao final.
+
+        Durante o carregamento inicial nenhuma sessao de automacao fica ligada a
+        pagina; o Selenium so volta a se conectar para ler o resultado.
+        """
+        self.execute(Command.QUIT)  # encerra so a sessao; o Chrome continua aberto
+        alvo_id = None
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self._porta_depuracao}/json/new?"
+                + urllib.parse.quote(url, safe=""),
+                method="PUT",
+            )
+            with urllib.request.urlopen(req, timeout=15) as r:
+                alvo_id = json.loads(r.read()).get("id")
+
+            inicio = time.time()
+            titulo_resultado_desde = None
+            while time.time() - inicio < espera_max_s:
+                if should_stop and should_stop():
+                    break
+                titulo, url_atual = self._titulo_aba(alvo_id)
+                t = titulo.lower()
+                if "/erro/" in url_atual or "demorando" in t:
+                    break  # pagina de erro: nao adianta esperar mais
+                if "sele" in t and "voo" in t:  # "Selecao de voos"
+                    titulo_resultado_desde = titulo_resultado_desde or time.time()
+                    if time.time() - titulo_resultado_desde >= 12:
+                        break
+                time.sleep(1)
+        finally:
+            options = webdriver.ChromeOptions()
+            options.debugger_address = f"127.0.0.1:{self._porta_depuracao}"
+            options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+            self.start_session(options.to_capabilities())
+            self.set_page_load_timeout(60)
+            self.set_script_timeout(15)
+
+        if alvo_id and alvo_id in self.window_handles:
+            # Fecha abas antigas (about:blank, tentativas anteriores).
+            for h in list(self.window_handles):
+                if h != alvo_id:
+                    try:
+                        self.switch_to.window(h)
+                        self.close()
+                    except Exception:
+                        pass
+            self.switch_to.window(alvo_id)
+        elif self.window_handles:
+            self.switch_to.window(self.window_handles[-1])
+
+    def quit(self):
+        try:
+            super().quit()
+        except Exception:
+            pass
+        _encerrar_processo_chrome(self._processo_chrome)
+        # Remove o perfil temporario (cada um ocupa 30-90 MB). Logo apos o
+        # encerramento o Windows pode manter arquivos travados por instantes.
+        perfil = getattr(self, "_perfil_temp_tcc", None)
+        if perfil:
+            for _ in range(10):
+                shutil.rmtree(perfil, ignore_errors=True)
+                if not Path(perfil).exists():
+                    break
+                time.sleep(0.5)
+
+
 def criar_driver(modo_privacidade="Sem cookies (perfil limpo)", headless=False,
                  user_agent_label=None, proxy=None):
-    options = webdriver.ChromeOptions()
-    options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     perfil_temp = None
-
-    ua = USER_AGENTS.get(user_agent_label or "") or next(iter(USER_AGENTS.values()))
-    options.add_argument(f"--user-agent={ua}")
-
-    if modo_privacidade == "Incognito":
-        options.add_argument("--incognito")
-    elif modo_privacidade == "Normal (com cookies)":
-        pass
+    if modo_privacidade == "Normal (com cookies)":
+        # Perfil persistente: cookies e historico se acumulam entre coletas.
+        perfil = PASTA_CHROME_PROFILES / "normal"
+        perfil.mkdir(parents=True, exist_ok=True)
     else:
         perfil_temp = tempfile.mkdtemp(prefix="chrome_profile_tcc_")
-        options.add_argument(f"--user-data-dir={perfil_temp}")
+        perfil = Path(perfil_temp)
 
+    porta = _porta_livre()
+    args = [
+        _localizar_chrome(),
+        f"--remote-debugging-port={porta}",
+        f"--user-data-dir={perfil}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--window-size=1366,900",
+    ]
+    if modo_privacidade == "Incognito":
+        args.append("--incognito")
+    ua = USER_AGENTS.get(user_agent_label or "")
+    if ua:
+        args.append(f"--user-agent={ua}")
     if headless:
-        options.add_argument("--headless=new")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--disable-software-rasterizer")
+        # O modo --headless e recusado pelo portal (se identifica como
+        # HeadlessChrome). "Oculto" = janela normal posicionada fora da tela.
+        args += ["--window-position=-32000,-32000", "--start-minimized"]
+    if proxy:
+        args.append(f"--proxy-server={proxy}")
+    args.append("about:blank")
 
-    if proxy:    
-        options.add_argument(f"--proxy-server={proxy}")
+    processo = subprocess.Popen(
+        args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        _aguardar_porta_depuracao(porta, processo)
+        options = webdriver.ChromeOptions()
+        options.debugger_address = f"127.0.0.1:{porta}"
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+        driver = ChromeAnexado(options=options)
+    except Exception:
+        _encerrar_processo_chrome(processo)
+        if perfil_temp:
+            shutil.rmtree(perfil_temp, ignore_errors=True)
+        raise
 
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-
-    driver = webdriver.Chrome(options=options)
+    driver._processo_chrome = processo
+    driver._porta_depuracao = porta
     driver.set_page_load_timeout(60)
     driver.set_script_timeout(15)
     if perfil_temp:
         driver._perfil_temp_tcc = perfil_temp
-    try:
-        driver.execute_cdp_cmd("Network.enable", {})
-    except Exception:
-        pass
-    driver.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    )
     return driver
 
 
@@ -297,7 +470,6 @@ def executar_experimento_thread(app_ctrl, config):
 
         for tentativa_driver in range(1, max_tentativas_driver + 1):
             driver = None
-            scraper_kwargs = None
 
             try:
                 if tentativa_driver > 1:
@@ -344,7 +516,11 @@ def executar_experimento_thread(app_ctrl, config):
                         from latam_scraper import scrape_latam
                         resultados = scrape_latam(**scraper_kwargs)
                     except ImportError as e:
-                        app_ctrl.log_err(f"latam_scraper.py nao encontrado: {e}")
+                        app_ctrl.log_err(
+                            f"Falha ao importar o modulo de coleta LATAM: {e}. "
+                            "Se o codigo foi atualizado com a interface aberta, "
+                            "feche e abra o programa novamente."
+                        )
                         resultados = []
                 else:
                     app_ctrl.log_warn(f"Plataforma '{plataforma}' desconhecida.")
@@ -688,8 +864,8 @@ def normalizar_colunas_dataset(df):
 
 def salvar_e_enviar(app_ctrl, resultados, exp_id, html_logs=None):
     """
-    Salva Excel, envia ao Google Sheets e — após confirmação de envio —
-    destrói os arquivos HTML de log (verificando hash MD5 antes de apagar).
+    Salva Excel, tenta o envio configurado ao Google Sheets e limpa os HTMLs.
+    A limpeza confere o hash MD5 registrado quando ele está disponível.
     """
     df = pd.DataFrame(resultados)
     df = normalizar_colunas_dataset(df)
@@ -699,7 +875,7 @@ def salvar_e_enviar(app_ctrl, resultados, exp_id, html_logs=None):
     cfg   = carregar_config()
     cred  = cfg.get("GSHEETS", "arquivo_credenciais", fallback="")
     id_pl = cfg.get("GSHEETS", "id_planilha",         fallback="")
-    aba   = cfg.get("GSHEETS", "nome_aba",             fallback="Flight Data ETL")
+    aba   = cfg.get("GSHEETS", "nome_aba",             fallback="Dados")
 
     if cred and id_pl:
         app_ctrl.log_info("[GSheets] Enviando ao Google Sheets...")
@@ -761,7 +937,6 @@ class ScraperApp(tk.Tk):
         self.configure(bg="#F0F4F8")
 
         self.stop_event        = stop_event
-        self.scheduler_running = False
         self.current_driver    = None
 
         global app_instance
@@ -806,7 +981,7 @@ class ScraperApp(tk.Tk):
 
         self.show_frame("StartPage")
         self.log_ok("Sistema iniciado. Bem-vindo ao Scraper de Passagens Aereas!")
-        self.log_info("Configure os parametros e inicie a coleta ou o agendador.")
+        self.log_info("Configure os parâmetros e inicie a coleta ou o agendador.")
 
     def _setup_styles(self):
         s = ttk.Style(self)
@@ -824,12 +999,11 @@ class ScraperApp(tk.Tk):
         s.configure("TSpinbox",     font=("Segoe UI", 10))
 
         btn_defs = {
-            "Green":  ("#27AE60", "#1E8449"),
-            "Blue":   ("#2980B9", "#1F618D"),
+            "Green":  ("#2CA55E", "#2CA55E"),
+            "Blue":   ("#2771A1", "#2771A1"),
             "Orange": ("#E67E22", "#CA6F1E"),
             "Red":    ("#E74C3C", "#CB4335"),
-            "Purple": ("#8E44AD", "#76448A"),
-            "Teal":   ("#16A085", "#117A65"),
+            "Teal":   ("#276155", "#276155"),
             "Gray":   ("#7F8C8D", "#626567"),
         }
         for name, (bg, active) in btn_defs.items():
@@ -862,11 +1036,6 @@ class ScraperApp(tk.Tk):
     def warn(self,  title, msg): self.after(0, lambda: messagebox.showwarning(title, msg))
     def error(self, title, msg): self.after(0, lambda: messagebox.showerror(title, msg))
 
-    def log_message_gui(self, msg):          self.log_info(msg)
-    def show_info_messagebox(self, t, m):    self.info(t, m)
-    def show_warning_messagebox(self, t, m): self.warn(t, m)
-    def show_error_messagebox(self, t, m):   self.error(t, m)
-
     def request_stop(self, mensagem="Sinal de parada enviado."):
         self.stop_event.set()
         self.log_warn(mensagem)
@@ -881,7 +1050,6 @@ class ScraperApp(tk.Tk):
             pass
 
     def set_scheduler_status(self, running):
-        self.scheduler_running = running
         self.after(0, lambda: [
             self.frames["AgendadorPage"].update_status_badge(running),
             self.frames["StartPage"].update_scheduler_badge(running),
@@ -900,26 +1068,26 @@ class StartPage(ttk.Frame):
                   font=("Segoe UI", 20, "bold"),
                   foreground="#1A3A5C").pack(pady=(28, 4))
         ttk.Label(self,
-                  text="Criado por Anonymous",
+                  text="Criado por Josilene Dias & Débora Santos",
                   font=("Segoe UI", 11, "italic"),
                   foreground="#6A7879").pack(pady=(0, 22))
 
-        nav = ttk.LabelFrame(self, text="Modulos do Sistema", padding="18 12 18 12")
+        nav = ttk.LabelFrame(self, text="Módulos do Sistema", padding="18 12 18 12")
         nav.pack(padx=50, fill="x")
 
         buttons = [
             ("Coleta Manual",
              "ExperimentoPage", "C.Green.TButton",
-             "Executa coleta para rota, data e parametros especificos"),
-            ("Agendador Automatico",
+             "Executa coleta para rota, data e parâmetros específicos"),
+            ("Agendador Automático",
              "AgendadorPage",   "C.Blue.TButton",
-             "Coleta continua em alta frequencia (horaria ou mais)"),
-            ("Historico & Exportacao",
+             "Coleta contínua em alta frequência (horária ou mais)"),
+            ("Histórico & Exportação",
              "HistoricoPage",   "C.Teal.TButton",
              "Visualiza arquivos gerados e envia ao Google Sheets"),
-            ("Configuracoes",
+            ("Configurações",
              "ConfigPage",      "C.Gray.TButton",
-             "Google Sheets, proxies, anti-deteccao e preferencias"),
+             "Google Sheets, proxies, anti-detecção e preferências"),
         ]
 
         for label, page, style, hint in buttons:
@@ -995,7 +1163,7 @@ class ExperimentoPage(ttk.Frame):
         rotas_frame.grid(row=1, column=1, sticky="ew", pady=5)
         
         self.rotas_vars = {}
-        for i, rota in enumerate(list(ROTAS_DISPONIVEIS.keys())):
+        for rota in ROTAS_DISPONIVEIS:
             var = tk.BooleanVar(value=True)
             self.rotas_vars[rota] = var
             ttk.Checkbutton(rotas_frame, text=rota, variable=var).pack(side="left", padx=(0, 15), pady=2)
@@ -1026,7 +1194,7 @@ class ExperimentoPage(ttk.Frame):
         self.rep_var = tk.IntVar(value=3)
         ttk.Spinbox(form, from_=3, to=10, textvariable=self.rep_var, font=("Segoe UI", 10)).grid(row=6, column=1, sticky="ew", pady=5)
 
-        ttk.Label(form, text="Modo Headless (sem janela):").grid(row=7, column=0, sticky="w", pady=5, padx=(0, 10))
+        ttk.Label(form, text="Ocultar janela do Chrome").grid(row=7, column=0, sticky="w", pady=5, padx=(0, 10))
         self.headless_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(form, variable=self.headless_var).grid(row=7, column=1, sticky="w", pady=5)
 
@@ -1164,7 +1332,7 @@ class AgendadorPage(ttk.Frame):
             cfg_frame, textvariable=self.priv_var, values=MODOS_PRIVACIDADE, state="readonly"
         ).grid(row=5, column=1, columnspan=3, sticky="ew", pady=6)
 
-        ttk.Label(cfg_frame, text="Janelas (Antecedencia):").grid(row=6, column=0, sticky="w", pady=6, padx=(0, 10))
+        ttk.Label(cfg_frame, text="Janelas (Antecedência):").grid(row=6, column=0, sticky="w", pady=6, padx=(0, 10))
         janelas_frame = ttk.Frame(cfg_frame)
         janelas_frame.grid(row=6, column=1, columnspan=3, sticky="ew", pady=6)
 
@@ -1178,7 +1346,7 @@ class AgendadorPage(ttk.Frame):
         self.exp_var = tk.StringVar(value="SCHED-01")
         ttk.Entry(cfg_frame, textvariable=self.exp_var, font=("Segoe UI", 10)).grid(row=7, column=1, columnspan=3, sticky="ew", pady=6)
 
-        ttk.Label(cfg_frame, text="Modo Headless (sem janela):").grid(row=8, column=0, sticky="w", pady=6, padx=(0, 10))
+        ttk.Label(cfg_frame, text="Ocultar janela do Chrome").grid(row=8, column=0, sticky="w", pady=6, padx=(0, 10))
         self.headless_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(cfg_frame, variable=self.headless_var).grid(row=8, column=1, sticky="w", pady=6)
 
@@ -1270,7 +1438,7 @@ class HistoricoPage(ttk.Frame):
         super().__init__(parent)
         self.controller = controller
 
-        ttk.Label(self, text="Historico & Exportacao",
+        ttk.Label(self, text="Histórico & Exportação",
                   font=("Segoe UI", 15, "bold"), foreground="#1A3A5C").pack(pady=(20, 4))
         ttk.Label(self, text=f"Arquivos em: {PASTA_DADOS_BRUTOS}",
                   font=("Segoe UI", 9), foreground="#7F8C8D").pack(pady=(0, 10))
@@ -1343,7 +1511,7 @@ class ConfigPage(ttk.Frame):
         super().__init__(parent)
         self.controller = controller
 
-        ttk.Label(self, text="Configuracoes do Experimento",
+        ttk.Label(self, text="Configurações do Experimento",
                   font=("Segoe UI", 15, "bold"), foreground="#1A3A5C").pack(pady=(20, 14))
 
         cfg = carregar_config()
@@ -1388,7 +1556,7 @@ class ConfigPage(ttk.Frame):
             value=cfg.getboolean("ANTIDETECT", "humanize", fallback=True)
         )
         self.save_html_var  = tk.BooleanVar(
-            value=cfg.getboolean("ANTIDETECT", "save_html", fallback=True)
+            value=cfg.getboolean("ANTIDETECT", "save_html", fallback=False)
         )
         self.screenshot_var = tk.BooleanVar(
             value=cfg.getboolean("ANTIDETECT", "screenshot", fallback=False)
@@ -1429,7 +1597,7 @@ class ConfigPage(ttk.Frame):
         else:
             self.proxy_list.insert("1.0", "# Ex: 192.168.1.1:8080\n# user:pass@host:porta")
 
-        ttk.Button(self, text="Salvar Configuracoes",
+        ttk.Button(self, text="Salvar Configurações",
                    style="C.Blue.TButton",
                    command=self._salvar).pack(pady=10, ipadx=10, ipady=5)
 
@@ -1464,8 +1632,8 @@ class ConfigPage(ttk.Frame):
         cfg["PROXY"]["list"]    = self.proxy_list.get("1.0", tk.END).strip()
 
         salvar_config(cfg)
-        self.controller.log_ok("Configuracoes salvas com sucesso.")
-        self.controller.info("Configuracoes", "Salvo com sucesso!")
+        self.controller.log_ok("Configurações salvas com sucesso.")
+        self.controller.info("Configurações", "Salvo com sucesso!")
 
 
 # ─── ENTRY POINT ──────────────────────────────────────────────────────────────

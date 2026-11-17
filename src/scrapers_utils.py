@@ -5,7 +5,6 @@ import random
 from datetime import datetime
 from pathlib import Path
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
 
 
 # ─── Helpers de extracao ────────────────────────────────────────────────────────
@@ -79,7 +78,7 @@ def _extrair_preco(card, seletor):
             continue
 
         has_moeda = bool(re.search(r'(?i)\b(r\$|brl|usd|eur)\b', texto))
-        candidatos.append((preco, has_moeda, texto))
+        candidatos.append((preco, has_moeda))
 
     if not candidatos:
         return None
@@ -99,30 +98,7 @@ def _extrair_preco(card, seletor):
     return preco_final
 
 
-def _extrair_escalas(card, seletor):
-    """
-    Extrai o numero de escalas de um card.
-    Retorna 0 para voo direto, int para escalas, None se nao encontrar.
-    """
-    try:
-        texto = card.find_element(By.CSS_SELECTOR, seletor).text.strip().lower()
-    except NoSuchElementException:
-        return None
-
-    if not texto:
-        return None
-
-    if any(p in texto for p in ["direto", "direct", "nonstop", "sem escala"]):
-        return 0
-
-    digitos = re.findall(r'\d+', texto)
-    if digitos:
-        return int(digitos[0])
-
-    return 1  
-
-
-# ─── FUNÇÕES DESCONTINUADAS (hash file system) ──────────────────────────────
+# ─── Hash e limpeza de HTML bruto ─────────────────────────────────────────
 
 def hash_gz_file(path) -> str:
     """Calcula MD5 de um arquivo compactado salvo para auditoria local."""
@@ -137,7 +113,7 @@ def hash_gz_file(path) -> str:
 
 
 def destruir_html_log(path, hash_esperado: str = "", log_fn=None) -> bool:
-    """Remove um HTML bruto apos envio, conferindo o hash quando disponivel."""
+    """Remove um HTML bruto, conferindo o hash esperado quando disponível."""
     path = Path(path)
     if not path.exists():
         if log_fn:
@@ -275,3 +251,35 @@ def _montar_registro(plataforma, url, origem, destino, data_voo_str, antecedenci
         "dia_semana_busca":     agora.strftime("%A"),
         "experimento_id":       experimento_id,
     }
+
+
+# ─── Registro das chamadas ao scraper ──────────────────────────────────────
+# Cada chamada a scrape_latam registra seu desfecho neste CSV. A orquestração
+# também pode incluir linhas sem preço no Excel quando registrar_sem_dados=True.
+# Falhas anteriores à chamada do scraper ficam no log da interface ou console.
+
+ARQUIVO_TENTATIVAS = Path(__file__).resolve().parent.parent / "LOGS" / "tentativas_coleta.csv"
+
+COLUNAS_TENTATIVAS = [
+    "data_hora_local", "plataforma", "origem", "destino", "data_voo",
+    "dias_antecedencia", "modo_privacidade", "experimento_id",
+    "status", "http_api_ofertas", "tentativas_carregamento",
+    "cards_encontrados", "precos_validos", "preco_brl", "duracao_ms", "detalhe",
+]
+
+def registrar_tentativa(**campos):
+    """Acrescenta uma linha ao CSV de tentativas. Nunca interrompe a coleta."""
+    import csv
+    try:
+        ARQUIVO_TENTATIVAS.parent.mkdir(parents=True, exist_ok=True)
+        novo = not ARQUIVO_TENTATIVAS.exists()
+        linha = {c: campos.get(c, "") for c in COLUNAS_TENTATIVAS}
+        if not linha["data_hora_local"]:
+            linha["data_hora_local"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(ARQUIVO_TENTATIVAS, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=COLUNAS_TENTATIVAS, delimiter=";")
+            if novo:
+                w.writeheader()
+            w.writerow(linha)
+    except Exception:
+        pass

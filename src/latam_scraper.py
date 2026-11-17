@@ -1,3 +1,4 @@
+import json
 import re
 import time
 import unicodedata
@@ -17,6 +18,7 @@ from scrapers_utils import (
     _verificar_cancelamento,
     sleep_interrompivel,
     _normalize_preco_text,
+    registrar_tentativa,
 )
 
 
@@ -55,6 +57,73 @@ TIMEOUT_CARDS_S = 55
 TIMEOUT_SPINNER_S = 20
 HTML_MINIMO_UTIL = 5000
 
+# Endpoint interno que o proprio site chama para listar as ofertas. O status HTTP
+# dessa resposta distingue bloqueio do portal (401/403/429) de lentidao real.
+API_OFERTAS = "/bff/air-offers/v2/offers/search"
+HTTP_BLOQUEIO = {401, 403, 429}
+
+
+def _atualizar_status_api(driver):
+    """Le os eventos de rede pendentes e guarda o ultimo status da API de ofertas."""
+    try:
+        eventos = driver.get_log("performance")
+    except Exception:
+        return getattr(driver, "_latam_api_status", None)
+    for ev in eventos:
+        try:
+            msg = json.loads(ev["message"])["message"]
+            if msg.get("method") != "Network.responseReceived":
+                continue
+            resp = msg["params"]["response"]
+            if API_OFERTAS in resp.get("url", ""):
+                driver._latam_api_status = int(resp.get("status") or 0)
+        except Exception:
+            continue
+    if getattr(driver, "_latam_api_status", None) is None:
+        # Fallback: Resource Timing da propria pagina (cobre o periodo em que o
+        # Selenium esteve desconectado e os logs de rede nao foram capturados).
+        try:
+            status = driver.execute_script(
+                "return performance.getEntriesByType('resource')"
+                ".filter(e => e.name.includes(arguments[0]))"
+                ".map(e => e.responseStatus || 0);",
+                API_OFERTAS,
+            )
+            status = [s for s in (status or []) if s]
+            if status:
+                driver._latam_api_status = int(status[-1])
+        except Exception:
+            pass
+    return getattr(driver, "_latam_api_status", None)
+
+
+def _abrir_url(driver, url, should_stop=None):
+    """Abre a URL; com Chrome anexado, carrega sem sessao de automacao ligada."""
+    _resetar_status_api(driver)
+    if hasattr(driver, "abrir_url_desanexado"):
+        driver.abrir_url_desanexado(url, should_stop=should_stop)
+        try:
+            driver.get_log("performance")  # descarta eventos da reconexao
+        except Exception:
+            pass
+    else:
+        driver.get(url)
+
+
+def _resetar_status_api(driver):
+    try:
+        driver.get_log("performance")
+    except Exception:
+        pass
+    try:
+        driver._latam_api_status = None
+    except Exception:
+        pass
+
+
+def _api_bloqueada(driver):
+    return _atualizar_status_api(driver) in HTTP_BLOQUEIO
+
 def _sem_acento(texto):
     return "".join(
         c for c in unicodedata.normalize("NFD", texto)
@@ -91,6 +160,8 @@ def _detectar_bloqueio(driver):
 
     if "acesso negado" in texto_sem_acento or "access denied" in texto:
         return True
+    if _api_bloqueada(driver):
+        return True
 
     for sel in SEL_BLOQUEIO:
         try:
@@ -117,6 +188,11 @@ def _diagnosticar_estado_pagina(driver):
     texto_sem_acento = snap["texto_sem_acento"]
 
     motivos = []
+    status_api = _atualizar_status_api(driver)
+    if status_api in HTTP_BLOQUEIO:
+        motivos.append(f"API de ofertas recusou a requisicao (HTTP {status_api}) - bloqueio antibot")
+    elif status_api:
+        motivos.append(f"API de ofertas HTTP {status_api}")
     if snap["html_len"] < HTML_MINIMO_UTIL:
         motivos.append(f"HTML muito pequeno ({snap['html_len']} bytes)")
     if "acesso negado" in texto_sem_acento or "access denied" in texto:
@@ -203,11 +279,11 @@ def _fechar_banner_cookies(driver, log_fn, modo_privacidade, should_stop=None):
 
     xpaths = [
         "//button[contains(translate(normalize-space(.), "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ', "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ', "
         "'abcdefghijklmnopqrstuvwxyzáàâãéèêíìîóòôõúùûç'), "
         "'aceite todos os cookies')]",
         "//button[contains(translate(normalize-space(.), "
-        "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ', "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ', "
         "'abcdefghijklmnopqrstuvwxyzáàâãéèêíìîóòôõúùûç'), "
         "'aceitar todos')]",
         "//button[contains(translate(normalize-space(.), "
@@ -239,8 +315,8 @@ def _clicar_refazer_busca(driver, log_fn, should_stop=None):
         (
             By.XPATH,
             "//button[contains(translate(normalize-space(.), "
-            "'ABCDEFGHIJKLMNOPQRSTUVWXYZÃÃ€Ã‚ÃƒÃ‰ÃˆÃŠÃÃŒÃŽÃ“Ã’Ã”Ã•ÃšÃ™Ã›Ã‡', "
-            "'abcdefghijklmnopqrstuvwxyzÃ¡Ã Ã¢Ã£Ã©Ã¨ÃªÃ­Ã¬Ã®Ã³Ã²Ã´ÃµÃºÃ¹Ã»Ã§'), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇ', "
+            "'abcdefghijklmnopqrstuvwxyzáàâãéèêíìîóòôõúùûç'), "
             "'realizar outra busca')]",
         ),
         (
@@ -300,9 +376,10 @@ def _hora_por_regex(texto, padrao):
 def _extrair_hora(card, seletor, fallback_texto, fallback_padrao):
     texto = _texto_por_seletor(card, seletor)
     m = re.search(r"\b\d{1,2}:\d{2}\b", texto)
-    if m:
-        return m.group(0)
-    return _hora_por_regex(fallback_texto, fallback_padrao)
+    hora = m.group(0) if m else _hora_por_regex(fallback_texto, fallback_padrao)
+    if re.fullmatch(r"\d:\d{2}", hora):
+        hora = "0" + hora
+    return hora
 
 def _extrair_horarios_por_texto(texto):
     horarios = re.findall(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", texto)
@@ -441,6 +518,12 @@ def _aguardar_cards(driver, log_fn, should_stop=None):
         cards = _buscar_cards(driver, log_fn, log=False)
         if cards:
             break
+        if _api_bloqueada(driver):
+            log_fn(
+                f"API de ofertas respondeu HTTP {driver._latam_api_status}: "
+                "o portal recusou a busca automatizada."
+            )
+            return []
         if _pagina_lenta(driver):
             log_fn("Tela de erro/lentidão da LATAM apareceu durante a espera dos cards.")
             break
@@ -468,6 +551,10 @@ def scrape_latam(driver, origem, destino, data_voo_str,
     resultados = []
     t_inicio = time.time()
     captcha = False
+    desfecho = {
+        "status": "erro", "tentativas": 0, "cards": 0,
+        "precos": 0, "preco": "", "detalhe": "",
+    }
 
     url = URL_TEMPLATE.format(
         origem=origem.upper(),
@@ -478,19 +565,20 @@ def scrape_latam(driver, origem, destino, data_voo_str,
     try:
         _verificar_cancelamento(should_stop)
         _log(f"Abrindo: {url}")
-        driver.get(url)
+        _abrir_url(driver, url, should_stop=should_stop)
         sleep_interrompivel(5, 9, enabled=humanize, should_stop=should_stop)
         _fechar_banner_cookies(driver, _log, modo_privacidade, should_stop=should_stop)
 
         _verificar_cancelamento(should_stop)
         captcha = _detectar_bloqueio(driver)
         if captcha:
-            _log("Bloqueio real detectado!")
+            _log("Bloqueio do portal detectado (antibot/CAPTCHA ou HTTP 401/403/429 na API de ofertas).")
 
         if not captcha:
             cards = []
             for tentativa in range(1, MAX_TENTATIVAS_CARREGAMENTO + 1):
                 _verificar_cancelamento(should_stop)
+                desfecho["tentativas"] = tentativa
                 if tentativa > 1:
                     espera_retry = 18 + (tentativa * 7)
                     _log(
@@ -504,7 +592,7 @@ def scrape_latam(driver, origem, destino, data_voo_str,
                         should_stop=should_stop,
                     )
                     _verificar_cancelamento(should_stop)
-                    driver.get(_url_retry(url, tentativa))
+                    _abrir_url(driver, _url_retry(url, tentativa), should_stop=should_stop)
                     sleep_interrompivel(5, 9, enabled=humanize, should_stop=should_stop)
                     _fechar_banner_cookies(
                         driver,
@@ -521,6 +609,13 @@ def scrape_latam(driver, origem, destino, data_voo_str,
 
                 cards = _aguardar_cards(driver, _log, should_stop=should_stop)
                 if cards:
+                    break
+
+                if _api_bloqueada(driver):
+                    # Insistir contra um bloqueio do portal so aumenta a carga
+                    # sobre o site; a rota e encerrada e registrada como bloqueada.
+                    captcha = True
+                    _log("Interrompendo tentativas: o portal bloqueou a busca automatizada.")
                     break
 
                 if _pagina_lenta(driver):
@@ -551,6 +646,7 @@ def scrape_latam(driver, origem, destino, data_voo_str,
                     break
 
             if cards:
+                desfecho["cards"] = len(cards)
                 _log(f"OK: {len(cards)} oferta(s) encontrada(s).")
 
                 agora = datetime.now()
@@ -601,6 +697,11 @@ def scrape_latam(driver, origem, destino, data_voo_str,
                         )
 
                         resultados.append(melhor_oferta)
+                        desfecho.update(
+                            status="sucesso",
+                            precos=menor_preco_info["total_precos"],
+                            preco=f"{preco_num:.2f}",
+                        )
                         _log(
                             f"OK: LATAM coleta OK: {origem}->{destino} | "
                             f"R$ {preco_num:.2f} | "
@@ -610,6 +711,7 @@ def scrape_latam(driver, origem, destino, data_voo_str,
                         _log(f"Erro ao processar melhor oferta: {e}")
                 else:
                     snap, motivo = _diagnosticar_estado_pagina(driver)
+                    desfecho.update(status="sem_preco", detalhe=motivo)
                     _log(
                         f"Aviso: nenhum preço válido encontrado para "
                         f"{origem}->{destino} em {data_voo_str}. "
@@ -618,13 +720,25 @@ def scrape_latam(driver, origem, destino, data_voo_str,
                     )
             else:
                 snap, motivo = _diagnosticar_estado_pagina(driver)
+                if captcha or "bloqueio antibot" in motivo:
+                    captcha = True
+                    status = "bloqueado"
+                elif "mensagem de indisponibilidade de voos" in motivo:
+                    status = "sem_oferta"
+                else:
+                    status = "timeout"
+                desfecho.update(status=status, detalhe=motivo)
                 _log(
                     f"Nenhum card de voo encontrado para {origem}->{destino}. "
                     f"Diagnóstico final: {motivo} | titulo='{snap['titulo']}' | "
                     f"html={snap['html_len']} bytes"
                 )
 
+        else:
+            desfecho.update(status="bloqueado", detalhe=_diagnosticar_estado_pagina(driver)[1])
+
     except (InvalidSessionIdException, NoSuchWindowException) as e:
+        desfecho.update(status="erro", detalhe=f"sessao encerrada: {e.__class__.__name__}")
         try:
             driver._sessao_invalida_tcc = True
         except Exception:
@@ -653,18 +767,37 @@ def scrape_latam(driver, origem, destino, data_voo_str,
             _log(f"Motivo técnico resumido: {e.__class__.__name__}")
         else:
             _log(f"Erro geral do Selenium na coleta: {e}")
+        desfecho.update(status="erro", detalhe=str(e).splitlines()[0][:300] if str(e) else "WebDriverException")
     except ColetaCancelada:
+        desfecho.update(status="cancelado")
         _log("Coleta cancelada pelo usuario.")
     except Exception as e:
+        desfecho.update(status="erro", detalhe=str(e)[:300])
         _log(f"Erro geral na coleta: {e}")
         import traceback
         _log(f"Traceback: {traceback.format_exc()}")
 
     if captcha and not resultados:
-        _log("Coleta bloqueada por CAPTCHA; nenhum registro vazio sera salvo.")
+        _log("Coleta bloqueada pelo portal (antibot/CAPTCHA). A tentativa terminou sem preço.")
 
+    duracao_ms = round((time.time() - t_inicio) * 1000)
+    try:
+        antecedencia_tent = (datetime.strptime(data_voo_str, "%Y-%m-%d") - datetime.now()).days
+    except Exception:
+        antecedencia_tent = ""
+    registrar_tentativa(
+        plataforma="LATAM", origem=origem.upper(), destino=destino.upper(),
+        data_voo=data_voo_str, dias_antecedencia=antecedencia_tent,
+        modo_privacidade=modo_privacidade, experimento_id=experimento_id,
+        status=desfecho["status"],
+        http_api_ofertas=getattr(driver, "_latam_api_status", None) or "",
+        tentativas_carregamento=desfecho["tentativas"],
+        cards_encontrados=desfecho["cards"], precos_validos=desfecho["precos"],
+        preco_brl=desfecho["preco"], duracao_ms=duracao_ms,
+        detalhe=desfecho["detalhe"],
+    )
     _log(
         f"Coleta concluida: {len(resultados)} registro(s) | "
-        f"{round((time.time() - t_inicio) * 1000)}ms"
+        f"status={desfecho['status']} | {duracao_ms}ms"
     )
     return resultados

@@ -4,8 +4,8 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 $distRoot = Join-Path $projectRoot "dist"
 $stageRoot = Join-Path $distRoot "acm_package"
-$packageRoot = Join-Path $stageRoot "Flight-Latam"
-$zipPath = Join-Path $distRoot "flight-latam-acm-software.zip"
+$packageRoot = Join-Path $stageRoot "AirPrice_JD"
+$zipPath = Join-Path $distRoot "airprice-jd-acm-software.zip"
 
 function Assert-UnderRoot {
     param(
@@ -21,6 +21,7 @@ function Assert-UnderRoot {
 }
 
 $requiredFiles = @(
+    ".gitignore",
     "README.md",
     "LICENSE",
     "SECURITY.md",
@@ -73,21 +74,22 @@ foreach ($relativePath in $requiredFiles) {
 }
 
 $manifest = @(
-    "Flight-Latam ACM Software Submission Package",
+    "AirPrice ACM Software Submission Package",
     "",
     "This ZIP is generated from a whitelist of source code, documentation,",
-    "installation instructions, license text, and public configuration examples.",
+    "installation instructions, license text, public configuration examples,",
+    "and supplemental images and spreadsheets from data/.",
     "",
-    "Excluded by design:",
+    "Excluded local files and directories",
     "- config/config.ini",
     "- credentials/",
     "- DADOS_BRUTOS/",
     "- LOGS/",
     "- __pycache__/",
     "- virtual environments",
-    "- generated spreadsheets, screenshots, HTML dumps, and local secrets",
+    "- collection spreadsheets, screenshots, HTML dumps, and local secrets",
     "",
-    "Included files:"
+    "Included files"
 ) + ($copiedFiles | Sort-Object | ForEach-Object { "- $_" })
 
 Set-Content -Path (Join-Path $packageRoot "PACKAGE_CONTENTS.txt") -Value $manifest -Encoding UTF8

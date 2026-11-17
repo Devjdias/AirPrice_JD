@@ -1,4 +1,3 @@
-import sys
 from datetime import datetime, timedelta
 
 from scraper_passagens import (
@@ -45,9 +44,9 @@ def main():
     
     for janela in janelas:
         data_voo = (datetime.now() + timedelta(days=janela)).strftime("%Y-%m-%d")
-        controller.log_info(f"\n==============================================")
+        controller.log_info("\n==============================================")
         controller.log_info(f"Pesquisando antecedência de {janela} dias (Voo: {data_voo})")
-        controller.log_info(f"==============================================")
+        controller.log_info("==============================================")
         
         base_config = {
             "data_voo_str": data_voo,
