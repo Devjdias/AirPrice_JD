@@ -1,10 +1,10 @@
-# AirPrice Scraper
+# ✈️ AirPrice Scraper
 
 O AirPrice Scraper é um sistema em Python para coleta automatizada de preços de passagens da LATAM, com interface gráfica, exportação local em Excel e envio opcional para Google Sheets. O código é distribuído no repositório `AirPrice_JD`.
 
 O projeto apoia análises acadêmicas de preços por antecedência de compra. Cada consulta busca uma passagem de ida, para um adulto, em classe econômica, e registra o menor preço válido entre os cards carregados na página.
 
-## Funcionalidades
+## ✨ Funcionalidades
 
 - Coleta manual com seleção de rotas, data do voo, repetições e modo de privacidade.
 - Agendador com ciclos de coleta, janelas de antecedência, intervalo e variação aleatória do intervalo, chamada de jitter.
@@ -15,7 +15,7 @@ O projeto apoia análises acadêmicas de preços por antecedência de compra. Ca
 - Capturas de tela e HTML compactado opcionais para diagnóstico.
 - Perfis limpos, perfil persistente, modo incógnito e proxy opcional.
 
-## Pré-requisitos
+## 🧩 Pré-requisitos
 
 - Python 3.10 ou superior, com `tkinter` disponível.
 - Google Chrome instalado.
@@ -25,7 +25,7 @@ O projeto apoia análises acadêmicas de preços por antecedência de compra. Ca
 
 A opção **Ocultar janela do Chrome** inicia um Chrome comum minimizado e posicionado fora da tela, com `headless=True` no código. Essa execução também utiliza uma sessão gráfica. A forma como a janela aparece depende do sistema operacional.
 
-## Instalação
+## 🚀 Instalação
 
 Baixe o código pelo GitHub, usando `Code > Download ZIP`, ou clone o repositório.
 
@@ -59,7 +59,7 @@ python -m pip install -r config/requirements.txt
 
 As dependências incluem Selenium, pandas, openpyxl, tkcalendar, gspread e google-auth. Os módulos da interface também são importados pelo script de console, portanto a instalação completa é necessária para as duas formas de execução.
 
-## Configuração inicial
+## 📦 Configuração inicial
 
 O programa lê `config/config.ini`. Para criar esse arquivo no primeiro uso, copie o modelo público. O comando abaixo preserva uma configuração local já existente.
 
@@ -111,7 +111,7 @@ Para usar Google Sheets, coloque o JSON da conta de serviço em `credentials/`, 
 
 No Windows, a detecção do Chrome consulta os diretórios usuais de instalação e o registro. No Linux/macOS, consulta nomes de executáveis no `PATH` e o caminho padrão do aplicativo no macOS. Se necessário, informe o caminho completo em `[CHROME]`.
 
-## Execução
+## ▶️ Execução
 
 ### Interface gráfica
 
@@ -160,7 +160,7 @@ Os perfis temporários são criados na pasta temporária do sistema operacional 
 
 O scraper monitora sinais de bloqueio, inclusive HTTP 401, 403 e 429 na API de ofertas utilizada pela página. A coleta depende do carregamento do site, de seus seletores e da disponibilidade do portal.
 
-## Dados e saídas
+## 📤 Dados e saídas
 
 | Local | Conteúdo |
 | --- | --- |
@@ -178,7 +178,7 @@ Com `save_html=True`, o programa salva HTML `.html.gz` e calcula seu MD5. A roti
 
 Se o envio ao Google Sheets falhar após a gravação do Excel, o arquivo local continua disponível para reenvio pelo histórico. O envio acrescenta linhas sem deduplicação e exige que a aba existente mantenha a ordem das colunas do dataset.
 
-## Estrutura do projeto
+## 📂 Estrutura do projeto
 
 ```text
 AirPrice_JD/
@@ -219,14 +219,14 @@ AirPrice_JD/
 
 A documentação técnica detalha a arquitetura, o fluxo de execução, as colunas dos arquivos e as limitações da implementação. [Consulte a documentação técnica](docs/DOCUMENTACAO_TECNICA.md).
 
-## Materiais complementares
+## 🧱 Materiais complementares
 
 - Planilha de análise disponibilizada com o projeto. [Abrir a planilha](data/analise.xlsx).
 - Diagrama de sequência UML disponibilizado como referência visual. [Abrir o diagrama](data/diagrama_sequência_UML.jpeg).
 - Capturas das páginas de início, coleta manual, agendador, histórico e configurações. [Início](data/inicio.png), [coleta manual](data/manual.png), [agendador](data/agendador.png), [histórico e exportação](<data/hist&expo.png>) e [configuração](data/config.png).
 - Vídeo demonstrativo da interface. [Assistir ao vídeo](https://l1nk.dev/0YbEY).
 
-## Pacote suplementar
+## 🗂️ Pacote suplementar
 
 O repositório contém o código-fonte, a documentação, a licença, o modelo público de configuração e os materiais complementares em `data/`. Para gerar o ZIP de submissão, execute o script PowerShell a partir da raiz do projeto.
 
@@ -238,10 +238,10 @@ O script gera `dist/airprice-jd-acm-software.zip`, com a pasta `AirPrice_JD/` e 
 
 O pacote utiliza o modelo público `config/config.example.ini`. Os diretórios locais de credenciais, coletas e logs ficam fora da seleção do script. Revise os materiais públicos de `data/` antes de gerar um pacote, pois os arquivos com essas extensões são incluídos automaticamente.
 
-## Segurança
+## 🔒 Segurança
 
 Mantenha credenciais JSON, configurações reais, tokens, proxies privados e dados de navegação nos diretórios locais ignorados pelo Git. O arquivo `.gitignore` também trata os resultados de coleta e os materiais públicos de `data/` de forma específica. A política de segurança descreve os cuidados de publicação e o procedimento para relatar problemas. [Consulte SECURITY.md](SECURITY.md).
 
-## Licença
+## 📄 Licença
 
 O projeto é disponibilizado sob a licença **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). [Consulte LICENSE](LICENSE).
